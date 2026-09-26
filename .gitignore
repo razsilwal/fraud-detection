@@ -1,0 +1,41 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# Data (large; download separately)
+data/raw/*.csv
+data/raw/*.zip
+data/processed/*
+!data/processed/.gitkeep
+!data/raw/.gitkeep
+data/*.db
+data/*.sqlite
+
+# Local prediction history
+*.db
+
+# Environment / OS
+.env
+.DS_Store
+Thumbs.db
+
+# Jupyter
+*.nbconvert.ipynb
+
+# IDE
+.idea/
+.vscode/
+*.swp
