@@ -20,7 +20,14 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.components import hero, inject_css, metric_card, risk_badge, transaction_form
+from app.components import (
+    hero,
+    inject_css,
+    metric_card,
+    risk_badge,
+    risk_gauge,
+    transaction_form,
+)
 from app.styles import APP_CSS
 from src.data_processing import dataset_overview, drop_duplicates_if_present, load_raw_dataset
 from src.evaluate import classification_metrics, threshold_sweep
@@ -31,7 +38,7 @@ from src.utils import FIGURES_DIR, MODELS_DIR, RAW_DATASET_PATH
 
 st.set_page_config(
     page_title="FraudGuard",
-    page_icon="FG",
+    page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -60,6 +67,9 @@ def load_metadata() -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+# ---------------------------------------------------------------------------
+# Page: Dashboard
+# ---------------------------------------------------------------------------
 def page_dashboard(df: pd.DataFrame, meta: dict) -> None:
     hero(
         "FraudGuard",
@@ -77,17 +87,31 @@ def page_dashboard(df: pd.DataFrame, meta: dict) -> None:
     metrics = (meta.get("evaluation_metrics") or {}) if meta else {}
     c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
-        metric_card("Transactions", f"{overview['n_rows']:,}")
+        metric_card("Transactions", f"{overview['n_rows']:,}", hint="After dedup")
     with c2:
-        metric_card("Fraudulent", f"{overview.get('n_fraud', 0):,}")
+        metric_card(
+            "Fraudulent",
+            f"{overview.get('n_fraud', 0):,}",
+            hint=f"{overview.get('fraud_rate', 0)*100:.3f}% of total",
+            variant="danger",
+        )
     with c3:
-        metric_card("Fraud rate", f"{overview.get('fraud_rate', 0)*100:.3f}%")
+        metric_card(
+            "Fraud rate",
+            f"{overview.get('fraud_rate', 0)*100:.3f}%",
+            hint="Rare-event problem",
+        )
     with c4:
         avg_amt = float(df["Amount"].mean()) if "Amount" in df.columns else 0.0
         metric_card("Avg. amount", f"{avg_amt:,.2f}")
     with c5:
         pr = metrics.get("pr_auc")
-        metric_card("Model PR-AUC", f"{pr:.3f}" if pr is not None else "—")
+        metric_card(
+            "Model PR-AUC",
+            f"{pr:.3f}" if pr is not None else "—",
+            hint=meta.get("model_name", "not trained") if meta else "not trained",
+            variant="success" if pr and pr > 0.5 else "",
+        )
 
     st.markdown("##### What this page is for")
     st.write(
@@ -113,8 +137,12 @@ def page_dashboard(df: pd.DataFrame, meta: dict) -> None:
             color_discrete_map={"Legitimate": "#2c5364", "Fraud": "#c45c26"},
             title="Class counts (absolute)",
         )
-        fig.update_layout(showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig, use_container_width=True)
+        fig.update_layout(
+            showlegend=False,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+        )
+        st.plotly_chart(fig, width="stretch")
     with right:
         amount_sample = df.sample(n=min(len(df), 12000), random_state=42)
         fig = px.histogram(
@@ -125,8 +153,12 @@ def page_dashboard(df: pd.DataFrame, meta: dict) -> None:
             title="Amount distribution (sampled)",
             color_discrete_map={"Legitimate": "#2c5364", "Fraud": "#c45c26"},
         )
-        fig.update_layout(legend_title="", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig, use_container_width=True)
+        fig.update_layout(
+            legend_title="",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+        )
+        st.plotly_chart(fig, width="stretch")
 
     if "hour_of_day" in df.columns:
         hourly = (
@@ -135,10 +167,15 @@ def page_dashboard(df: pd.DataFrame, meta: dict) -> None:
             .reset_index()
             .rename(columns={"hour_of_day": "hour", "Class": "fraud_rate"})
         )
-        fig = px.line(hourly, x="hour", y="fraud_rate", title="Fraud rate by hour-of-day proxy")
+        fig = px.line(
+            hourly,
+            x="hour",
+            y="fraud_rate",
+            title="Fraud rate by hour-of-day proxy",
+        )
         fig.update_traces(line_color="#c45c26")
         fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     if metrics:
         st.markdown("##### Held-out test summary (from training run)")
@@ -153,11 +190,14 @@ def page_dashboard(df: pd.DataFrame, meta: dict) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# Page: Analyzer
+# ---------------------------------------------------------------------------
 def page_analyzer(df: pd.DataFrame, meta: dict) -> None:
     hero(
         "Transaction risk analyzer",
         "Score a single (demo) transaction. Probability comes from the saved model; "
-        "the 0–100 score and LOW/MEDIUM/HIGH bands are communication layers, not calibrated odds.",
+        "the 0-100 score and LOW/MEDIUM/HIGH bands are communication layers, not calibrated odds.",
     )
     try:
         artifacts = load_model_bundle()
@@ -170,17 +210,21 @@ def page_analyzer(df: pd.DataFrame, meta: dict) -> None:
 
     b1, b2, b3 = st.columns(3)
     with b1:
-        if st.button("Load legitimate sample", use_container_width=True) and not df.empty:
+        if st.button("Load legitimate sample", width="stretch") and not df.empty:
             legit = df[df["Class"] == 0]
             if not legit.empty:
-                st.session_state.sample_row = legit.sample(1, random_state=None).iloc[0].to_dict()
+                st.session_state.sample_row = (
+                    legit.sample(1, random_state=None).iloc[0].to_dict()
+                )
     with b2:
-        if st.button("Load fraud sample", use_container_width=True) and not df.empty:
+        if st.button("Load fraud sample", width="stretch") and not df.empty:
             fraud = df[df["Class"] == 1]
             if not fraud.empty:
-                st.session_state.sample_row = fraud.sample(1, random_state=None).iloc[0].to_dict()
+                st.session_state.sample_row = (
+                    fraud.sample(1, random_state=None).iloc[0].to_dict()
+                )
     with b3:
-        if st.button("Reset to zeros", use_container_width=True):
+        if st.button("Reset to zeros", width="stretch"):
             st.session_state.sample_row = {}
 
     threshold = st.slider(
@@ -192,11 +236,21 @@ def page_analyzer(df: pd.DataFrame, meta: dict) -> None:
         help="Lower values catch more fraud (higher recall) and create more false alarms.",
     )
     payload = transaction_form(st.session_state.sample_row or {})
-    if st.button("Predict risk", type="primary"):
-        result = predict_risk(payload, artifacts=artifacts, threshold=threshold)
+
+    if st.button("🔍 Predict risk", type="primary", width="stretch"):
+        with st.spinner("Scoring transaction…"):
+            result = predict_risk(payload, artifacts=artifacts, threshold=threshold)
         st.session_state.last_result = result
         st.session_state.last_payload = payload
         save_prediction(payload, result)
+
+        cat = (result.get("risk_category") or "LOW").upper()
+        if cat in ("HIGH", "CRITICAL"):
+            st.toast(f"{cat} risk flagged", icon="🚨")
+        elif cat == "MEDIUM":
+            st.toast("Medium risk — review recommended", icon="⚠️")
+        else:
+            st.toast("Low risk — looks legitimate", icon="✅")
 
     result = st.session_state.get("last_result")
     if not result:
@@ -204,17 +258,35 @@ def page_analyzer(df: pd.DataFrame, meta: dict) -> None:
         return
 
     st.markdown('<div class="risk-panel">', unsafe_allow_html=True)
-    a, b, c = st.columns(3)
-    a.metric("Fraud probability", f"{result['fraud_probability']*100:.2f}%")
-    b.metric("Risk score", f"{result['risk_score']}/100")
+    a, b, c = st.columns([1.2, 1, 1])
+    with a:
+        metric_card(
+            "Fraud probability",
+            f"{result['fraud_probability']*100:.2f}%",
+            hint=f"Threshold {result['threshold']:.2f}",
+            variant="danger" if result["model_prediction"] == 1 else "",
+        )
+    with b:
+        metric_card(
+            "Risk score",
+            f"{result['risk_score']}/100",
+            hint="Communication layer",
+            variant="danger" if result["risk_score"] >= 60 else "",
+        )
     with c:
-        st.markdown("**Risk level**")
+        st.markdown(
+            '<div style="font-size:0.72rem;text-transform:uppercase;'
+            'letter-spacing:0.08em;color:#8b98a9;margin-bottom:6px;">Risk level</div>',
+            unsafe_allow_html=True,
+        )
         st.markdown(risk_badge(result["risk_category"]), unsafe_allow_html=True)
         st.caption(
-            "Predicted class = 1 if probability ≥ threshold "
-            f"({result['threshold']:.2f}); currently **{result['model_prediction']}**."
+            f"Predicted class = **{result['model_prediction']}** "
+            f"(prob ≥ {result['threshold']:.2f})"
         )
     st.markdown("</div>", unsafe_allow_html=True)
+
+    risk_gauge(result["risk_score"], result["risk_category"])
 
     st.markdown("##### Factors influencing this score")
     st.caption(
@@ -234,11 +306,18 @@ def page_analyzer(df: pd.DataFrame, meta: dict) -> None:
             color="contribution",
             color_continuous_scale="YlOrRd",
         )
-        fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(contrib, hide_index=True, use_container_width=True)
+        fig.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            showlegend=False,
+        )
+        st.plotly_chart(fig, width="stretch")
+        st.dataframe(contrib, hide_index=True, width="stretch")
 
 
+# ---------------------------------------------------------------------------
+# Page: Performance
+# ---------------------------------------------------------------------------
 def page_performance(meta: dict) -> None:
     hero(
         "Model performance",
@@ -247,13 +326,17 @@ def page_performance(meta: dict) -> None:
     )
     payload_path = MODELS_DIR / "eval_payload.json"
     if not payload_path.exists() or not meta:
-        st.warning("Train the model first (`python -m src.train`) to populate evaluation artifacts.")
+        st.warning(
+            "Train the model first (`python -m src.train`) to populate evaluation artifacts."
+        )
         return
 
     payload = json.loads(payload_path.read_text(encoding="utf-8"))
     y_true = np.asarray(payload["y_true"])
     y_prob = np.asarray(payload["y_prob"])
-    threshold = st.slider("Display threshold", 0.1, 0.9, float(payload.get("threshold", 0.5)), 0.05)
+    threshold = st.slider(
+        "Display threshold", 0.1, 0.9, float(payload.get("threshold", 0.5)), 0.05
+    )
     metrics = classification_metrics(y_true, y_prob, threshold)
 
     k1, k2, k3, k4, k5 = st.columns(5)
@@ -264,18 +347,28 @@ def page_performance(meta: dict) -> None:
     k5.metric("PR-AUC", f"{metrics['pr_auc']:.3f}")
 
     st.markdown(
-        f"**TP** {metrics['tp']} · **FP** {metrics['fp']} · **FN** {metrics['fn']} · **TN** {metrics['tn']}  \n"
-        f"Accuracy {metrics['accuracy']:.4f} is shown only as a cautionary number — a majority classifier "
-        "would also look strong."
+        f"**TP** {metrics['tp']} · **FP** {metrics['fp']} · "
+        f"**FN** {metrics['fn']} · **TN** {metrics['tn']}  \n"
+        f"Accuracy {metrics['accuracy']:.4f} is shown only as a cautionary number — "
+        "a majority classifier would also look strong."
     )
 
     cm = confusion_matrix(y_true, (y_prob >= threshold).astype(int), labels=[0, 1])
-    cm_df = pd.DataFrame(cm, index=["Actual legit", "Actual fraud"], columns=["Pred legit", "Pred fraud"])
+    cm_df = pd.DataFrame(
+        cm,
+        index=["Actual legit", "Actual fraud"],
+        columns=["Pred legit", "Pred fraud"],
+    )
     left, right = st.columns(2)
     with left:
-        fig = px.imshow(cm_df, text_auto=True, color_continuous_scale="Blues", title="Confusion matrix")
+        fig = px.imshow(
+            cm_df,
+            text_auto=True,
+            color_continuous_scale="Blues",
+            title="Confusion matrix",
+        )
         fig.update_layout(paper_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         roc_png = FIGURES_DIR / "roc_curve.png"
         if roc_png.exists():
             st.image(str(roc_png), caption="ROC curve from training report")
@@ -286,12 +379,12 @@ def page_performance(meta: dict) -> None:
         fig = px.line(roc_df, x="FPR", y="TPR", title="ROC curve")
         fig.update_traces(line_color="#1b3a4b")
         fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         pr_df = pd.DataFrame({"Recall": rec, "Precision": prec})
-        fig = px.line(pr_df, x="Recall", y="Precision", title="Precision–Recall curve")
+        fig = px.line(pr_df, x="Recall", y="Precision", title="Precision-Recall curve")
         fig.update_traces(line_color="#c45c26")
         fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     sweep = threshold_sweep(y_true, y_prob)
     fig = px.line(
@@ -300,16 +393,23 @@ def page_performance(meta: dict) -> None:
         y=["precision", "recall", "f1"],
         title="Threshold analysis",
     )
-    fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", yaxis_title="score")
-    st.plotly_chart(fig, use_container_width=True)
-    st.dataframe(sweep, hide_index=True, use_container_width=True)
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        yaxis_title="score",
+    )
+    st.plotly_chart(fig, width="stretch")
+    st.dataframe(sweep, hide_index=True, width="stretch")
 
     table_path = ROOT / "reports" / "test_metrics.csv"
     if table_path.exists():
         st.markdown("##### All models on the same test split")
-        st.dataframe(pd.read_csv(table_path), hide_index=True, use_container_width=True)
+        st.dataframe(pd.read_csv(table_path), hide_index=True, width="stretch")
 
 
+# ---------------------------------------------------------------------------
+# Page: Analytics
+# ---------------------------------------------------------------------------
 def page_analytics(df: pd.DataFrame) -> None:
     hero(
         "Fraud analytics",
@@ -333,11 +433,20 @@ def page_analytics(df: pd.DataFrame) -> None:
         color_discrete_map={"Legitimate": "#2c5364", "Fraud": "#c45c26"},
         title="Amount by class",
     )
-    fig.update_layout(showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-    st.plotly_chart(fig, use_container_width=True)
-    st.caption("Fraud is not confined to huge purchases; many fraudulent rows have modest amounts.")
+    fig.update_layout(
+        showlegend=False,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+    )
+    st.plotly_chart(fig, width="stretch")
+    st.caption(
+        "Fraud is not confined to huge purchases; many fraudulent rows have modest amounts."
+    )
 
-    feat = st.selectbox("PCA feature vs class (KDE-style histogram)", ["V4", "V10", "V12", "V14", "V17", "Amount"])
+    feat = st.selectbox(
+        "PCA feature vs class (KDE-style histogram)",
+        ["V4", "V10", "V12", "V14", "V17", "Amount"],
+    )
     fig = px.histogram(
         sample,
         x=feat,
@@ -350,46 +459,77 @@ def page_analytics(df: pd.DataFrame) -> None:
         title=f"Distribution of {feat}",
     )
     fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
-    corr_cols = [c for c in ["V4", "V10", "V12", "V14", "V17", "Amount", "hour_of_day", "Class"] if c in sample.columns]
+    corr_cols = [
+        c
+        for c in ["V4", "V10", "V12", "V14", "V17", "Amount", "hour_of_day", "Class"]
+        if c in sample.columns
+    ]
     corr = sample[corr_cols].corr()
-    fig = px.imshow(corr, text_auto=".2f", color_continuous_scale="RdBu_r", title="Correlation snapshot")
+    fig = px.imshow(
+        corr,
+        text_auto=".2f",
+        color_continuous_scale="RdBu_r",
+        title="Correlation snapshot",
+    )
     fig.update_layout(paper_bgcolor="rgba(0,0,0,0)")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
     st.caption("Correlation is association, not causation — especially for PCA components.")
 
 
+# ---------------------------------------------------------------------------
+# Page: History
+# ---------------------------------------------------------------------------
 def page_history() -> None:
     hero(
         "Prediction history",
         "Local SQLite log of demo scores from this machine. Do not store real cardholder data here.",
     )
-    if st.button("Refresh"):
+    if st.button("🔄 Refresh"):
         st.rerun()
     hist = load_history()
     if hist.empty:
         st.info("No predictions stored yet. Score a transaction on the analyzer page.")
         return
-    st.dataframe(hist.drop(columns=["payload_json"], errors="ignore"), hide_index=True, use_container_width=True)
+    st.dataframe(
+        hist.drop(columns=["payload_json"], errors="ignore"),
+        hide_index=True,
+        width="stretch",
+    )
     with st.expander("Raw payloads"):
-        st.dataframe(hist, hide_index=True, use_container_width=True)
+        st.dataframe(hist, hide_index=True, width="stretch")
 
 
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 def main() -> None:
     inject_css(APP_CSS)
-    st.sidebar.markdown("**FraudGuard**")
-    st.sidebar.caption("Fraud detection & risk analytics")
+
+    st.sidebar.markdown(
+        """
+        <div style="padding:6px 2px 12px 2px;">
+          <div style="font-size:1.15rem; font-weight:700; color:#E6EDF3;">🛡️ FraudGuard</div>
+          <div style="font-size:0.75rem; color:#8b98a9;">Fraud detection & risk analytics</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
     page = st.sidebar.radio(
         "Navigate",
         [
-            "Dashboard",
-            "Transaction Risk Analyzer",
-            "Model Performance",
-            "Fraud Analytics",
-            "Prediction History",
+            "📊  Dashboard",
+            "🔍  Transaction Risk Analyzer",
+            "📈  Model Performance",
+            "🧪  Fraud Analytics",
+            "🗂️  Prediction History",
         ],
+        label_visibility="collapsed",
     )
+    page_key = page.split("  ", 1)[-1]
+
     st.sidebar.markdown("---")
     st.sidebar.caption(
         "Educational portfolio system. High test-set scores on a public PCA dataset "
@@ -399,13 +539,13 @@ def main() -> None:
     df = load_transactions()
     meta = load_metadata()
 
-    if page == "Dashboard":
+    if page_key == "Dashboard":
         page_dashboard(df, meta)
-    elif page == "Transaction Risk Analyzer":
+    elif page_key == "Transaction Risk Analyzer":
         page_analyzer(df, meta)
-    elif page == "Model Performance":
+    elif page_key == "Model Performance":
         page_performance(meta)
-    elif page == "Fraud Analytics":
+    elif page_key == "Fraud Analytics":
         page_analytics(df)
     else:
         page_history()
